@@ -54,3 +54,4 @@ dist_/
 examples/
 mitsuba0.6-documentation.pdf
 wmain_stub.obj
+.vscode/

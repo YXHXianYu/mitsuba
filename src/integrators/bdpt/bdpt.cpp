@@ -193,6 +193,19 @@ public:
 
     bool render(Scene *scene, RenderQueue *queue, const RenderJob *job,
             int sceneResID, int sensorResID, int samplerResID) {
+
+        static constexpr bool IS_OUTPUT_VARIANCE = true;
+
+        if (!IS_OUTPUT_VARIANCE) {
+            return render_origin(scene, queue, job, sceneResID, sensorResID, samplerResID);
+        } else {
+            return render_new(scene, queue, job, sceneResID, sensorResID, samplerResID);
+        }
+    }
+
+    bool render_origin(Scene *scene, RenderQueue *queue, const RenderJob *job,
+            int sceneResID, int sensorResID, int samplerResID) {
+
         ref<Scheduler> scheduler = Scheduler::getInstance();
         ref<Sensor> sensor = scene->getSensor();
         const Film *film = sensor->getFilm();
@@ -230,6 +243,124 @@ public:
         #endif
 
         return process->getReturnStatus() == ParallelProcess::ESuccess;
+    }
+
+    bool render_new(Scene *scene, RenderQueue *queue, const RenderJob *job,
+            int sceneResID, int sensorResID, int samplerResID) {
+
+        ref<Scheduler> scheduler = Scheduler::getInstance();
+        ref<Sensor> sensor = scene->getSensor();
+        Film *film = sensor->getFilm(); // I remove the const specifier here
+        size_t sampleCount = scene->getSampler()->getSampleCount();
+        size_t nCores = scheduler->getCoreCount();
+
+        Log(EDebug, "Size of data structures: PathVertex=%i bytes, PathEdge=%i bytes",
+            (int) sizeof(PathVertex), (int) sizeof(PathEdge));
+
+        Log(EInfo, "Starting render job (%ix%i, " SIZE_T_FMT " samples, " SIZE_T_FMT
+            " %s, " SSE_STR ") ..", film->getCropSize().x, film->getCropSize().y,
+            sampleCount, nCores, nCores == 1 ? "core" : "cores");
+        
+        Log(EInfo, "BDPT Variance Estimator: BDPT Output Variance");
+
+        if (sampleCount == 1) {
+            Log(EError, "BDPT Variance Estimator: sampleCount == 1. Cannot compute variance.");
+        }
+
+        m_config.blockSize = scene->getBlockSize();
+        m_config.cropSize = film->getCropSize();
+        m_config.sampleCount = 1;
+        m_config.dump();
+
+        Log(EDebug, "BDPT Variance Estimator: blockSize: %d; cropSize: (%d, %d); sampleCount: %d",
+            m_config.blockSize, m_config.cropSize.x, m_config.cropSize.y, m_config.sampleCount);
+        
+        // m_block = new ImageBlock(Bitmap::ESpectrumAlphaWeight, blockSize, rfilter);
+        // m_lightImage = new ImageBlock(Bitmap::ESpectrum, conf.cropSize, rfilter);
+
+        auto film_bitmap = film->getBitmap();
+        auto pixel_sum = new Bitmap(Bitmap::ESpectrum, Bitmap::EFloat, film_bitmap->getSize());
+        auto pixel_square_sum = new Bitmap(Bitmap::ESpectrum, Bitmap::EFloat, film_bitmap->getSize());
+
+        m_config.sampleCount = 1;
+        for (size_t i = 0; i < sampleCount; i++) {
+            Log(EInfo, "BDPT Variance Estimator: %d-th spp start.", i);
+
+            bool b_reset_sampler = (i == 0);
+            ref<BDPTProcess> process = new BDPTProcess(job, queue, m_config, b_reset_sampler);
+            m_process = process;
+
+            process->bindResource("scene", sceneResID);
+            process->bindResource("sensor", sensorResID);
+            process->bindResource("sampler", samplerResID);
+            scheduler->schedule(process);
+
+            scheduler->wait(process);
+            m_process = NULL;
+
+            // process->getResult()->getImageBlock()->getBitmap()->getPixelFormat;
+
+            if (process->getReturnStatus() != ParallelProcess::ESuccess) { return false; }
+
+            process->develop(1.0 / sampleCount);
+
+            Log(EInfo, "BDPT Variance Estimator: %d-th spp end. Data is converting", i);
+
+            // the following code, refer to Film::addBitmap
+            size_t n_pixels = film_bitmap->getSize().x * film_bitmap->getSize().y;
+            Float* film_bitmap_p = film->getBitmap()->getFloatData();
+            Float* pixel_sum_p = pixel_sum->getFloatData();
+            Float* pixel_square_sum_p = pixel_square_sum->getFloatData();
+
+            for (size_t i = 0; i < n_pixels; i++) {
+                for (size_t j = 0; j < SPECTRUM_SAMPLES; j++) {
+                    pixel_sum_p[j] += film_bitmap_p[j];
+                    pixel_square_sum_p[j] += film_bitmap_p[j] * film_bitmap_p[j];
+                }
+
+                film_bitmap_p += SPECTRUM_SAMPLES + 2; // because EPixelFormat == ESpectrumAlphaWeight (2 more channels)
+                pixel_sum_p += SPECTRUM_SAMPLES;
+                pixel_square_sum_p += SPECTRUM_SAMPLES;
+            }
+        }
+
+        Log(EInfo, "BDPT Variance Estimator: Rendering end. Data is converting");
+
+        {
+            size_t n_pixels = film_bitmap->getSize().x * film_bitmap->getSize().y;
+            Float* film_bitmap_p = film->getBitmap()->getFloatData();
+            Float* pixel_sum_p = pixel_sum->getFloatData();
+            Float* pixel_square_sum_p = pixel_square_sum->getFloatData();
+
+            for (size_t i = 0; i < n_pixels; i++) {
+                for (size_t j = 0; j < SPECTRUM_SAMPLES; j++) {
+
+                    auto v = pixel_sum_p[j];
+                    auto v2 = pixel_square_sum_p[j];
+
+                    static const bool IS_OUTPUT_VARIANCE = true;
+
+                    if (IS_OUTPUT_VARIANCE) {
+                        auto variance = 1.0 / (sampleCount - 1) * (v2 - v * v / sampleCount);
+                        film_bitmap_p[j] = (Float)(variance);
+
+                    } else {
+                        // The following code could show the correctness of the framework
+                        // The output will be the same as the original code
+                        auto mean = v / sampleCount;
+                        film_bitmap_p[j] = mean;
+                    }
+                }
+
+                film_bitmap_p += SPECTRUM_SAMPLES + 2;
+                pixel_sum_p += SPECTRUM_SAMPLES;
+                pixel_square_sum_p += SPECTRUM_SAMPLES;
+            }
+        }
+
+        Log(EInfo, "BDPT Variance Estimator: End.");
+
+        return true;
     }
 
     MTS_DECLARE_CLASS()

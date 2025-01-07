@@ -27,9 +27,11 @@ MTS_NAMESPACE_BEGIN
 /*                         Worker implementation                        */
 /* ==================================================================== */
 
+static ref<Sampler> m_last_sampler; // 如果写在类里面，不知道为什么链接不上，神秘。所以我直接写外面了
+
 class BDPTRenderer : public WorkProcessor {
 public:
-    BDPTRenderer(const BDPTConfiguration &config) : m_config(config) { }
+    BDPTRenderer(const BDPTConfiguration &config, bool b_reset_sampler) : m_config(config), m_b_reset_sampler(b_reset_sampler) { }
 
     BDPTRenderer(Stream *stream, InstanceManager *manager)
         : WorkProcessor(stream, manager), m_config(stream) { }
@@ -52,7 +54,14 @@ public:
     void prepare() {
         Scene *scene = static_cast<Scene *>(getResource("scene"));
         m_scene = new Scene(scene);
-        m_sampler = static_cast<Sampler *>(getResource("sampler"));
+
+        if (!m_b_reset_sampler && m_last_sampler) { // 避免sampler被重置，导致每次结果相同（variance === 0）
+            m_sampler = m_last_sampler;
+        } else {
+            m_sampler = static_cast<Sampler *>(getResource("sampler"));
+            m_last_sampler = m_sampler;
+        }
+
         m_sensor = static_cast<Sensor *>(getResource("sensor"));
         m_rfilter = m_sensor->getFilm()->getReconstructionFilter();
         m_scene->removeSensor(scene->getSensor());
@@ -314,7 +323,7 @@ public:
     }
 
     ref<WorkProcessor> clone() const {
-        return new BDPTRenderer(m_config);
+        return new BDPTRenderer(m_config, m_b_reset_sampler);
     }
 
     MTS_DECLARE_CLASS()
@@ -326,6 +335,7 @@ private:
     MemoryPool m_pool;
     BDPTConfiguration m_config;
     HilbertCurve2D<uint8_t> m_hilbertCurve;
+    bool m_b_reset_sampler;
 };
 
 
@@ -334,22 +344,22 @@ private:
 /* ==================================================================== */
 
 BDPTProcess::BDPTProcess(const RenderJob *parent, RenderQueue *queue,
-        const BDPTConfiguration &config) :
-    BlockedRenderProcess(parent, queue, config.blockSize), m_config(config) {
+        const BDPTConfiguration &config, bool b_reset_sampler) :
+    BlockedRenderProcess(parent, queue, config.blockSize), m_config(config), m_b_reset_sampler(b_reset_sampler) {
     m_refreshTimer = new Timer();
 }
 
 ref<WorkProcessor> BDPTProcess::createWorkProcessor() const {
-    return new BDPTRenderer(m_config);
+    return new BDPTRenderer(m_config, m_b_reset_sampler);
 }
 
-void BDPTProcess::develop() {
+void BDPTProcess::develop(Float munaulMultiplierForLightImage) {
     if (!m_config.lightImage)
         return;
     LockGuard lock(m_resultMutex);
     const ImageBlock *lightImage = m_result->getLightImage();
     m_film->setBitmap(m_result->getImageBlock()->getBitmap());
-    m_film->addBitmap(lightImage->getBitmap(), 1.0f / m_config.sampleCount);
+    m_film->addBitmap(lightImage->getBitmap(), 1.0f / m_config.sampleCount * munaulMultiplierForLightImage);
     m_refreshTimer->reset();
     m_queue->signalRefresh(m_parent);
 }

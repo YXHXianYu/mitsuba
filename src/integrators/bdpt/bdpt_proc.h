@@ -37,12 +37,12 @@ MTS_NAMESPACE_BEGIN
 class BDPTProcess : public BlockedRenderProcess {
 public:
     BDPTProcess(const RenderJob *parent, RenderQueue *queue,
-        const BDPTConfiguration &config);
+        const BDPTConfiguration &config, bool b_reset_sampler = true);
 
     inline const BDPTWorkResult *getResult() const { return m_result.get(); }
 
     /// Develop the image
-    void develop();
+    void develop(Float munaulMultiplier = 1.0f);
 
     /* ParallelProcess impl. */
     void processResult(const WorkResult *wr, bool cancelled);
@@ -57,6 +57,7 @@ private:
     ref<BDPTWorkResult> m_result;
     ref<Timer> m_refreshTimer;
     BDPTConfiguration m_config;
+    bool m_b_reset_sampler;
 };
 
 MTS_NAMESPACE_END

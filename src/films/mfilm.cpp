@@ -203,6 +203,10 @@ public:
         }
     }
 
+    Bitmap* getBitmap() {
+        return m_storage->getBitmap();
+    }
+
     bool develop(const Point2i &sourceOffset, const Vector2i &size,
             const Point2i &targetOffset, Bitmap *target) const {
         const Bitmap *source = m_storage->getBitmap();

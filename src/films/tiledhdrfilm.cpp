@@ -354,6 +354,11 @@ public:
             "rendering technique or use a non-tiled film. (e.g. 'hdrfilm')");
     }
 
+    Bitmap* getBitmap() {
+        Log(EError, "getBitmap(): This film does not support direct access to the image data!");
+        return NULL;
+    }
+
     void potentiallyWrite(int x, int y) {
         if (x < 0 || y < 0 || x >= m_blocksH || y >= m_blocksV)
             return;

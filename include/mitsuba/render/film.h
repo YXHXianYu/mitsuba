@@ -57,6 +57,9 @@ public:
     /// Accumulate a bitmap on top of the radiance values stored in the film
     virtual void addBitmap(const Bitmap *bitmap, Float multiplier = 1.0f) = 0;
 
+    /// Return the film as a bitmap (added by yxh)
+    virtual Bitmap* getBitmap() = 0;
+
     /// Set the target filename (with or without extension)
     virtual void setDestinationFile(const fs::path &filename, uint32_t blockSize) = 0;
 
